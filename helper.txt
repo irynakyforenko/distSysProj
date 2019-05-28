@@ -1,0 +1,26 @@
+npm run startHub
+npm run startChat
+sudo docker run --rm --net=host -e CONSUL_BIND_INTERFACE=wlp5s0 --name=c1 consul
+sudo docker run --rm --name=projRedis -p 6379:6379 redis
+
+
+sudo docker exec -it projRedis bash
+redis-cli
+DEL messages
+
+
+
+mongod --replSet="projectRepl" --dbpath /home/charlie/work/proj/mongo1/ --port 27017 --bind_ip 192.168.1.148
+mongod --replSet="projectRepl" --dbpath /home/charlie/work/proj/mongo2/ --port 27018 --bind_ip 192.168.1.148
+mongod --replSet="projectRepl" --dbpath /home/charlie/work/proj/mongo3/ --port 27019 --bind_ip 192.168.1.148
+
+rsconfig = {
+	_id : "projectRepl",
+	members:[
+		{ _id : 0, host : "192.168.1.148:27017"},
+		{ _id : 1, host : "192.168.1.148:27018"},
+		{ _id : 2, host : "192.168.1.148:27019"}
+	]
+}
+
+rs.initiate( rsconfig )

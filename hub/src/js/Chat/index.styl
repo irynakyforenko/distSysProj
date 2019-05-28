@@ -1,0 +1,33 @@
+messageAreaHeight = 70px
+
+:local(.chat)
+  border 1px solid black
+  .messages
+    height "calc(100% - %s)" % messageAreaHeight
+    padding 10px
+    overflow auto
+    >div
+      display flex
+      align-content flex-end
+      flex-wrap wrap
+      .message
+        width 100%
+        margin 5px 0
+        display flex
+        .name
+          margin-right 10px
+        >div
+          flex-grow 1
+          margin-right 10px
+  .sendMessage
+    height messageAreaHeight
+    display flex
+    align-items center
+    textarea
+      height 100%
+      width calc(100% - 150px)
+      padding 10px
+      resize none
+    button  
+      width 150px
+      height 80%

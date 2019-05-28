@@ -1,0 +1,300 @@
+#!/usr/bin/env node
+/**
+ * Module dependencies.
+ */
+var app = require('../app');
+var debug = require('debug')('hub');
+var http = require('http');
+const rp = require("request-promise");
+
+
+const { CONSUL_HOST } = process.env;
+var consul = require('consul')({
+  promisify: true,
+  host: CONSUL_HOST,
+});
+
+
+function getServiceByName(services, name){
+  for(var service in services)
+    if(services[ service ].Service === name)
+      return services[ service ];
+  
+  return null;
+}
+/**
+ * Get port from environment and store in Express.
+ */
+
+
+var port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+const io = require('socket.io')(server);
+const aliveServices = {
+  chat: true,
+  news: true,
+  weather: true
+};
+// =========== watch chat service ===========
+const watchChat = consul.watch({
+  method: consul.catalog.service.nodes,
+  options: { service: 'chat' }
+});
+ 
+watchChat.on('change', function(data, res) {
+  const chat = data.filter(it => it.ServiceName === "chat");
+  if(chat.length == 0){
+    io.emit("chatIsDown");
+    aliveServices.chat = false;
+  }
+  else {
+    io.emit("chatIsUp");
+    aliveServices.chat = true;
+  }
+});
+// =========== watch chat service ===========
+
+// =========== watch news service ===========
+const watchNews = consul.watch({
+  method: consul.catalog.service.nodes,
+  options: { service: 'news' }
+});
+ 
+watchNews.on('change', function(data, res) {
+  const news = data.filter(it => it.ServiceName === "news");
+  if(news.length == 0){
+    
+    io.emit("newsIsDown");
+    aliveServices.news = false;
+  }
+  else {
+    io.emit("newsIsUp");
+    aliveServices.news = true;
+  }
+});
+// =========== watch news service ===========
+
+// =========== watch weather service ===========
+const watchWeather = consul.watch({
+  method: consul.catalog.service.nodes,
+  options: { service: 'weather' }
+});
+ 
+watchWeather.on('change', function(data, res) {
+  const news = data.filter(it => it.ServiceName === "weather");
+  if(news.length == 0){
+    
+    io.emit("weatherIsDown");
+    aliveServices.weather = false;
+  }
+  else {
+    io.emit("weatherIsUp");
+    aliveServices.weather = true;
+  }
+});
+// =========== watch weather service ===========
+
+io.sockets.on('connection', async function(socket) {
+  if(!aliveServices.chat) socket.emit("chatIsDown");
+  if(!aliveServices.news) socket.emit("newsIsDown");
+  if(!aliveServices.weather) socket.emit("weatherIsDown");
+
+  socket.on("username", async function(username){
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const { Address, Port } = getServiceByName(JSON.parse(services), "chat");
+    
+    const isUsernameFree = await rp({
+      method: 'POST',
+      uri: `http://${ Address }:${Port}/username`,
+      body: { username },
+      json: true
+    });
+
+    if(isUsernameFree == "taken")
+      socket.emit("usernameTaken");
+    else {
+      socket.emit("usernameFree");
+      socket._chatName = username;
+    }
+  });
+
+  socket.on("sendMessage", async (msg) => {
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const { Address, Port } = getServiceByName(JSON.parse(services), "chat");
+
+    const messages = await rp({
+      method: 'POST',
+      uri: `http://${ Address }:${Port}/messages`,
+      body: { msg, name: socket._chatName },
+      json: true
+    });
+
+    io.emit("updateMessages", JSON.stringify(messages));
+  });
+
+  socket.on("getMessages", async function(cb){
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const chat = getServiceByName(JSON.parse(services), "chat");
+    if(chat == null) return;
+
+    const { Address, Port } = chat;
+
+    const messages = await rp({
+      method: 'GET',
+      uri: `http://${ Address }:${Port}/messages`,
+    });
+
+    cb(messages);
+  });
+
+  socket.on("getNews", async function(cb){
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const newsServ = getServiceByName(JSON.parse(services), "news");
+    if(newsServ == null) return;
+
+    const { Address, Port } = newsServ;
+
+    const news = await rp({
+      method: 'GET',
+      uri: `http://${ Address }:${Port}/news${ socket._chatName ? `?user=${ socket._chatName}` : ''  }`,
+    });
+
+    cb(JSON.parse(news));
+  });
+
+
+  socket.on("markSingleNewsAsFavourite", async function(index, cb){
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const newsServ = getServiceByName(JSON.parse(services), "news");
+    
+    if(newsServ == null) return;
+
+    const { Address, Port } = newsServ;
+
+    const news = await rp({
+      method: 'POST',
+      uri: `http://${ Address }:${Port}/markSingleNewsAsFavourite${ socket._chatName ? `?user=${ socket._chatName}` : '' }`,
+      body: { index },
+      json: true
+    });
+
+    cb();
+  });
+
+  socket.on("getWeather", async function(cb){
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const weatherServ = getServiceByName(JSON.parse(services), "weather");
+    if(weatherServ == null) return;
+
+    const { Address, Port } = weatherServ;
+
+    const records = await rp({
+      method: 'GET',
+      uri: `http://${ Address }:${Port}/reports`,
+    });
+
+    cb(JSON.parse(records));
+  });
+
+  socket.on("disconnect", async () => {
+    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+    const chat = getServiceByName(JSON.parse(services), "chat");
+    const newsService = getServiceByName(JSON.parse(services), "news");
+
+    if(chat !== null){
+      const { Address, Port } = chat;
+
+      rp({
+        method: 'DELETE',
+        uri: `http://${ Address }:${Port}/username`,
+        body: { username: socket._chatName },
+        json: true
+      });
+    }
+
+    if(newsService !== null){
+      const { Address, Port } = newsService;
+
+      rp({
+        method: 'DELETE',
+        uri: `http://${ Address }:${Port}/deleteFavourites`,
+        body: { username: socket._chatName },
+        json: true
+      });
+    }
+  });
+});
+
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}

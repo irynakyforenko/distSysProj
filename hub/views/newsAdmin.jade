@@ -1,0 +1,16 @@
+extends layout
+
+block content
+  script(src="/js/socket.io.slim.js")
+  fieldset.adminCreateNews
+    legend Create news entry
+    div
+      label Title
+      input#title(type="text")
+    div
+      label Description
+      input#desc(type="text")
+    div
+      button#sendNews Create
+
+  script(src='/js/newsAdmin.js')

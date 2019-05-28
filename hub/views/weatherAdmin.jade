@@ -1,0 +1,18 @@
+extends layout
+
+block content
+  fieldset.adminCreateNews
+    legend Create weather report
+    div
+      label Day
+      input#day(type="text")
+    div
+      label Hour
+      input#hour(type="text")
+    div
+      label Description
+      input#desc(type="text")
+    div
+      button#sendReport Create
+
+  script(src='/js/weatherAdmin.js')
