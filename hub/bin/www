@@ -8,7 +8,13 @@ var http = require('http');
 const rp = require("request-promise");
 
 
-const { CONSUL_HOST } = process.env;
+const { 
+  CONSUL_HOST,
+  CHAT_ID,
+  NEWS_ID,
+  NEWS_ID2,
+  WEATHER_ID, 
+} = process.env;
 var consul = require('consul')({
   promisify: true,
   host: CONSUL_HOST,
@@ -16,6 +22,14 @@ var consul = require('consul')({
 
 
 function getServiceByName(services, name){
+  for(var service in services)
+    if(services[ service ].Service === name)
+      return services[ service ];
+  
+  return null;
+}
+
+function getServiceById(services, id){
   for(var service in services)
     if(services[ service ].Service === name)
       return services[ service ];
@@ -77,6 +91,7 @@ watchNews.on('change', function(data, res) {
     aliveServices.news = true;
   }
 });
+
 // =========== watch news service ===========
 
 // =========== watch weather service ===========
@@ -105,100 +120,196 @@ io.sockets.on('connection', async function(socket) {
   if(!aliveServices.weather) socket.emit("weatherIsDown");
 
   socket.on("username", async function(username){
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const { Address, Port } = getServiceByName(JSON.parse(services), "chat");
-    
-    const isUsernameFree = await rp({
-      method: 'POST',
-      uri: `http://${ Address }:${Port}/username`,
-      body: { username },
-      json: true
-    });
+    try {
+      const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      const { Address, Port } = getServiceByName(JSON.parse(services), "chat");    
 
-    if(isUsernameFree == "taken")
-      socket.emit("usernameTaken");
-    else {
-      socket.emit("usernameFree");
-      socket._chatName = username;
+      const isUsernameFree = await rp({
+        method: 'POST',
+        uri: `http://${ Address }:${Port}/username`,
+        body: { username },
+        json: true
+      });
+
+      if(isUsernameFree == "taken")
+        socket.emit("usernameTaken");
+      else {
+        socket.emit("usernameFree");
+        socket._chatName = username;
+      }
+    } catch(e) {
+      console.log("chat");
+      console.log(e);
+      consul.agent.service.deregister({id: CHAT_ID}, (err) => {
+        console.log('de-registered chat', err);          
+      })
+      io.emit("chatIsDown");
+      aliveServices.chat = false;
     }
   });
 
   socket.on("sendMessage", async (msg) => {
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const { Address, Port } = getServiceByName(JSON.parse(services), "chat");
+    try {
+      const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      const { Address, Port } = getServiceByName(JSON.parse(services), "chat");
 
-    const messages = await rp({
-      method: 'POST',
-      uri: `http://${ Address }:${Port}/messages`,
-      body: { msg, name: socket._chatName },
-      json: true
-    });
+      const messages = await rp({
+        method: 'POST',
+        uri: `http://${ Address }:${Port}/messages`,
+        body: { msg, name: socket._chatName },
+        json: true
+      });
 
-    io.emit("updateMessages", JSON.stringify(messages));
+      io.emit("updateMessages", JSON.stringify(messages));
+    }catch(e){
+      console.log("chat");
+      console.log(e);
+      consul.agent.service.deregister({id: CHAT_ID}, (err) => {
+        console.log('de-registered chat', err);          
+      })
+      io.emit("chatIsDown");
+      aliveServices.chat = false;
+     }
   });
 
   socket.on("getMessages", async function(cb){
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const chat = getServiceByName(JSON.parse(services), "chat");
-    if(chat == null) return;
+    try{
+      const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      const chat = getServiceByName(JSON.parse(services), "chat");
+      if(chat == null) return;
 
-    const { Address, Port } = chat;
+      const { Address, Port } = chat;
 
-    const messages = await rp({
-      method: 'GET',
-      uri: `http://${ Address }:${Port}/messages`,
-    });
+      const messages = await rp({
+        method: 'GET',
+        uri: `http://${ Address }:${Port}/messages`,
+      });
 
-    cb(messages);
+      cb(messages);
+    }catch(e){
+      console.log("chat");
+      console.log(e);
+      consul.agent.service.deregister({id: CHAT_ID}, (err) => {
+        console.log('de-registered chat', err);          
+      })
+      io.emit("chatIsDown");
+      aliveServices.chat = false;
+    }
   });
 
   socket.on("getNews", async function(cb){
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const newsServ = getServiceByName(JSON.parse(services), "news");
-    if(newsServ == null) return;
+    let services, newsServ;
+    try{
+      services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      newsServ = getServiceByName(JSON.parse(services), "news");
+      if(newsServ == null) return;
 
-    const { Address, Port } = newsServ;
+      const { Address, Port } = newsServ;
 
-    const news = await rp({
-      method: 'GET',
-      uri: `http://${ Address }:${Port}/news${ socket._chatName ? `?user=${ socket._chatName}` : ''  }`,
-    });
+      const news = await rp({
+        method: 'GET',
+        uri: `http://${ Address }:${Port}/news${ socket._chatName ? `?user=${ socket._chatName}` : ''  }`,
+      });
 
-    cb(JSON.parse(news));
+      return cb(JSON.parse(news));
+    }catch(e){
+      console.log("news");
+      console.log(e);
+      consul.agent.service.deregister({id: newsServ.ID},async (err) => {
+        console.log('de-registered news', err); 
+        
+        services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+        newsServ = getServiceByName(JSON.parse(services), "news");
+
+        if(newsServ !== null){
+          const { Address, Port } = newsServ;
+
+          const news = await rp({
+            method: 'GET',
+            uri: `http://${ Address }:${Port}/news${ socket._chatName ? `?user=${ socket._chatName}` : ''  }`,
+          });
+    
+          cb(JSON.parse(news));
+          return;
+        };
+
+        io.emit("newsIsDown");
+        aliveServices.news = false;
+      });
+    }
   });
 
 
   socket.on("markSingleNewsAsFavourite", async function(index, cb){
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const newsServ = getServiceByName(JSON.parse(services), "news");
-    
-    if(newsServ == null) return;
+    let services, newsServ;
+    try{
+      services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      newsServ = getServiceByName(JSON.parse(services), "news");
+      
+      if(newsServ == null) return;
 
-    const { Address, Port } = newsServ;
+      const { Address, Port } = newsServ;
 
-    const news = await rp({
-      method: 'POST',
-      uri: `http://${ Address }:${Port}/markSingleNewsAsFavourite${ socket._chatName ? `?user=${ socket._chatName}` : '' }`,
-      body: { index },
-      json: true
-    });
+      const news = await rp({
+        method: 'POST',
+        uri: `http://${ Address }:${Port}/markSingleNewsAsFavourite${ socket._chatName ? `?user=${ socket._chatName}` : '' }`,
+        body: { index },
+        json: true
+      });
 
-    cb();
+      return cb();
+      
+    }catch(e){
+      console.log("news");
+      console.log(e);
+      consul.agent.service.deregister({id: newsServ.ID},async (err) => {
+        console.log('de-registered news', err); 
+        
+        services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+        newsServ = getServiceByName(JSON.parse(services), "news");
+
+        if(newsServ !== null){
+          const { Address, Port } = newsServ;
+
+          const news = await rp({
+            method: 'POST',
+            uri: `http://${ Address }:${Port}/markSingleNewsAsFavourite${ socket._chatName ? `?user=${ socket._chatName}` : '' }`,
+            body: { index },
+            json: true
+          });
+
+          cb();
+        };
+
+        io.emit("newsIsDown");
+        aliveServices.news = false;
+      });
+    }
   });
 
   socket.on("getWeather", async function(cb){
-    const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
-    const weatherServ = getServiceByName(JSON.parse(services), "weather");
-    if(weatherServ == null) return;
+    try{
+      const services = await rp(`http://${ CONSUL_HOST }:8500/v1/agent/services`);
+      const weatherServ = getServiceByName(JSON.parse(services), "weather");
+      if(weatherServ == null) return;
 
-    const { Address, Port } = weatherServ;
+      const { Address, Port } = weatherServ;
 
-    const records = await rp({
-      method: 'GET',
-      uri: `http://${ Address }:${Port}/reports`,
-    });
+      const records = await rp({
+        method: 'GET',
+        uri: `http://${ Address }:${Port}/reports`,
+      });
 
-    cb(JSON.parse(records));
+      cb(JSON.parse(records));
+    } catch(e){
+      console.log("weather");
+      console.log(e);
+      consul.agent.service.deregister({id: WEATHER_ID}, (err) => {
+        console.log('de-registered weather', err);          
+      })
+      io.emit("weatherIsDown");
+      aliveServices.weather = false;
+    }
   });
 
   socket.on("disconnect", async () => {
@@ -214,7 +325,7 @@ io.sockets.on('connection', async function(socket) {
         uri: `http://${ Address }:${Port}/username`,
         body: { username: socket._chatName },
         json: true
-      });
+      }).catch(function(){});
     }
 
     if(newsService !== null){
@@ -225,7 +336,7 @@ io.sockets.on('connection', async function(socket) {
         uri: `http://${ Address }:${Port}/deleteFavourites`,
         body: { username: socket._chatName },
         json: true
-      });
+      }).catch(function(){});
     }
   });
 });

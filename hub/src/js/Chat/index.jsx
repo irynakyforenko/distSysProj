@@ -46,6 +46,9 @@ export default class Chat extends React.Component {
 
     __socket.on("usernameFree", () => {
       this.setState({ usernameError: null });
+      __socket.emit("getMessages", messages => {
+        this.hydrateMessages(messages);
+      });
     });
 
     __socket.on("updateMessages", messages => {

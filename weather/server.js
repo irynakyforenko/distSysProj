@@ -75,6 +75,7 @@ consul.agent.service.register(details, (err, xyz) => {
       console.log('de-registered.', err);
       process.exit();
     });
+    // process.exit();
   });
 });
 
